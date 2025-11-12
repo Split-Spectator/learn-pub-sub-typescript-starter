@@ -1,5 +1,7 @@
-import type { ConfirmChannel } from "amqplib";
-
+import type { ConfirmChannel,  } from "amqplib";
+import amqp  from "amqplib";
+//import type {SimpleQueueType} from ""
+ import type {Channel } from "amqplib";
 
 export async function publishJSON<T>(
     ch: ConfirmChannel,
@@ -16,4 +18,27 @@ export async function publishJSON<T>(
     ch.publish(exchange, routingKey, buf, options);
 
   };
+  type SimpleQueueType = "durable" | "transient";
+ 
+  export async function declareAndBind(
+    conn: amqp.ChannelModel,
+    exchange: string,
+    queueName: string,
+    key: string,
+    queueType: SimpleQueueType,
+  ): Promise<[Channel, amqp.Replies.AssertQueue]> {
+    const channel = await conn.createChannel();
+
+    const isTransient = queueType === "transient";
+  
+    const queue = await channel.assertQueue(queueName, {
+      durable: !isTransient,
+      autoDelete: isTransient,
+      exclusive: isTransient,
+      
+    });
+  
+    await channel.bindQueue(queue.queue, exchange, key);
+    return [channel, queue];
+  }
   
