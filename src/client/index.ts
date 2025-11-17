@@ -1,14 +1,15 @@
 import amqp from "amqplib";
 import { clientWelcome, commandStatus, printClientHelp, printQuit } from "../internal/gamelogic/gamelogic.js";
-import { declareAndBind, subscribeJSON, SimpleQueueType  } from "../internal/pubsub/message.js";
-import { ExchangePerilDirect, PauseKey } from "../internal/routing/routing.js";
+import { declareAndBind, subscribeJSON, SimpleQueueType, publishJSON  } from "../internal/pubsub/message.js";
+import { ExchangePerilDirect, PauseKey, ArmyMovesPrefix, ExchangePerilTopic } from "../internal/routing/routing.js";
 import type {  PlayingState } from "../internal/gamelogic/gamestate.js";
 import  { GameState } from "../internal/gamelogic/gamestate.js";
 import { commandSpawn } from "../internal/gamelogic/spawn.js";
 import { getInput } from "../internal/gamelogic/gamelogic.js";
-import { commandMove } from "../internal/gamelogic/move.js";
- import { cleanupAndExit } from "../server/exit.js";
+import { commandMove, handleMove } from "../internal/gamelogic/move.js";
+import { cleanupAndExit } from "../server/exit.js";
 import { handlePause } from "../internal/gamelogic/pause.js";
+import type { ArmyMove } from "../internal/gamelogic/gamedata.js";
  
 
 async function main() {
@@ -27,13 +28,20 @@ async function main() {
   console.log("Connection Succesful!!!")
 
   const name = await clientWelcome();
-  const queueName = `${PauseKey}.${name}` 
+  const confirmCh = await connection.createConfirmChannel();
+  const pauseUser = `${PauseKey}.${name}` ;
 
-  await declareAndBind(connection, ExchangePerilDirect, queueName, PauseKey, SimpleQueueType.Transient );
+  const armyMovesKey =   `${ArmyMovesPrefix}.*`;
+  const armyMovesQueue =  `${ArmyMovesPrefix}.${name}` ;
   
+  await declareAndBind(connection, ExchangePerilTopic, armyMovesQueue, armyMovesKey, SimpleQueueType.Transient );
+
+  await declareAndBind(connection, ExchangePerilDirect, pauseUser, PauseKey, SimpleQueueType.Transient );
+
+
   const state = new GameState(name);
-  await subscribeJSON(connection, ExchangePerilDirect, queueName, PauseKey, SimpleQueueType.Transient, handlerPause(state));
- 
+  await subscribeJSON(connection, ExchangePerilDirect, pauseUser, PauseKey, SimpleQueueType.Transient, handlerPause(state));
+  await subscribeJSON(connection, ExchangePerilTopic, armyMovesQueue, armyMovesKey, SimpleQueueType.Transient, handlerMove(state));
   while (true) {
     const words = await getInput();
     if (!words.length) continue;
@@ -44,7 +52,11 @@ async function main() {
           await commandSpawn(state, words);
           break;
         case "move":
-          await commandMove(state, words);
+          console.log(`armyMovesQueue = ${armyMovesQueue}`)
+          const move = await commandMove(state, words);
+         
+          await publishJSON(confirmCh, ExchangePerilTopic, armyMovesQueue, move)
+
           break;
         case "status":
           await commandStatus(state);
@@ -69,13 +81,13 @@ async function main() {
   
     process.stdout.write("> ");
   }
-
+}
 
 main().catch((err) => {
   console.error("Fatal error:", err);
   process.exit(1);
 });
-
+ 
 function handlerPause(gs: GameState): (ps: PlayingState) => void {
   return function (ps: PlayingState) {
     if (ps.isPaused) {
@@ -90,5 +102,13 @@ function handlerPause(gs: GameState): (ps: PlayingState) => void {
       console.log("------------------------");
     }
     console.log("> ");
+  };
+}
+
+function handlerMove(gs: GameState): (move: ArmyMove) => void {
+  return function (move: ArmyMove) {
+    handleMove(gs, move);
+    console.log(`Moved ${move.units.length} units to ${move.toLocation}`);
+    process.stdout.write("> ");
   };
 }
