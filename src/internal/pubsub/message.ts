@@ -52,8 +52,8 @@ export async function publishJSON<T>(
     exchange: string,
     queueName: string,
     key: string,
-    queueType: SimpleQueueType, // an enum to represent "durable" or "transient"
-    handler: (data: T) => void,
+    queueType: SimpleQueueType, 
+    handler: (data: T) =>  Ack | Promise<Ack>,
   ): Promise<void> {
       const [channel, queue] = await declareAndBind(
         conn,
@@ -63,11 +63,36 @@ export async function publishJSON<T>(
         queueType
       );
     
-      await channel.consume(queueName, (msg) => {
+      await channel.consume(queueName, async (msg) => { 
         if (!msg) return;
+        console.log(`[${queueName}] message received`);
+        try {
         const parsedData = JSON.parse(msg.content.toString());
-        handler(parsedData);
-        channel.ack(msg);
+        const ack = await handler(parsedData);
+        console.log(`[${queueName}] handler typeof: ${typeof ack}, value:`, ack);
+        switch (ack) {
+          case "Ack":
+            console.log(`[${queueName}] Ack`);
+            channel.ack(msg);
+            break;
+          case "NackRequeue":
+            console.log(`[${queueName}] NackRequeue`);
+            channel.nack(msg, false, true);
+            break;
+          case "NackDiscard":
+            console.log(`[${queueName}] NackDiscard`);
+            channel.nack(msg, false, false);
+            break; 
+          default:
+            console.log("something is funked. hit default")
+            channel.nack(msg, false, false);
+            break;
+        } 
+       }catch (err) {
+          console.log(`[${queueName}] Handler error -> NackDiscard`, err);
+          channel.nack(msg, false, false);
+        }
       });
     }
   
+    export type Ack = "Ack" | "NackRequeue" | "NackDiscard";

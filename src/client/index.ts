@@ -2,7 +2,7 @@ import amqp from "amqplib";
 import { clientWelcome, commandStatus, printClientHelp, printQuit } from "../internal/gamelogic/gamelogic.js";
 import { declareAndBind, subscribeJSON, SimpleQueueType, publishJSON  } from "../internal/pubsub/message.js";
 import { ExchangePerilDirect, PauseKey, ArmyMovesPrefix, ExchangePerilTopic } from "../internal/routing/routing.js";
-import type {  PlayingState } from "../internal/gamelogic/gamestate.js";
+import type {  PlayingState, } from "../internal/gamelogic/gamestate.js";
 import  { GameState } from "../internal/gamelogic/gamestate.js";
 import { commandSpawn } from "../internal/gamelogic/spawn.js";
 import { getInput } from "../internal/gamelogic/gamelogic.js";
@@ -10,6 +10,8 @@ import { commandMove, handleMove } from "../internal/gamelogic/move.js";
 import { cleanupAndExit } from "../server/exit.js";
 import { handlePause } from "../internal/gamelogic/pause.js";
 import type { ArmyMove } from "../internal/gamelogic/gamedata.js";
+
+ 
  
 
 async function main() {
@@ -40,8 +42,24 @@ async function main() {
 
 
   const state = new GameState(name);
-  await subscribeJSON(connection, ExchangePerilDirect, pauseUser, PauseKey, SimpleQueueType.Transient, handlerPause(state));
-  await subscribeJSON(connection, ExchangePerilTopic, armyMovesQueue, armyMovesKey, SimpleQueueType.Transient, handlerMove(state));
+  await subscribeJSON<PlayingState>(
+    connection,
+    ExchangePerilDirect,
+    pauseUser,
+    PauseKey,
+    SimpleQueueType.Transient,
+    (ps) => handlePause(state, ps), 
+  );
+  
+  await subscribeJSON<ArmyMove>(
+    connection,
+    ExchangePerilTopic,
+    armyMovesQueue,
+    armyMovesKey,
+    SimpleQueueType.Transient,
+    (m) => handleMove(state, m), // returns Ack
+  );
+  
   while (true) {
     const words = await getInput();
     if (!words.length) continue;
