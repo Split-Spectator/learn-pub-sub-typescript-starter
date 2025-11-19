@@ -73,22 +73,22 @@ export async function publishJSON<T>(
         try {
         const parsedData = JSON.parse(msg.content.toString());
         const ack = await handler(parsedData);
-        console.log(`[${queueName}] handler typeof: ${typeof ack}, value:`, ack);
+        //console.log(`[${queueName}] handler typeof: ${typeof ack}, value:`, ack);
         switch (ack) {
           case "Ack":
-            console.log(`[${queueName}] Ack`);
+            //console.log(`[${queueName}] Ack`);
             channel.ack(msg);
             break;
           case "NackRequeue":
-            console.log(`[${queueName}] NackRequeue`);
+            //console.log(`[${queueName}] NackRequeue`);
             channel.nack(msg, false, true);
             break;
           case "NackDiscard":
-            console.log(`[${queueName}] NackDiscard`);
+            //console.log(`[${queueName}] NackDiscard`);
             channel.nack(msg, false, false);
             break; 
           default:
-            console.log("something is funked. hit default")
+            //console.log("something is funked. hit default")
             channel.nack(msg, false, false);
             break;
         } 
