@@ -4,6 +4,7 @@ import amqp  from "amqplib";
  import type {Channel, ConsumeMessage } from "amqplib";
 import { handleWar } from "../gamelogic/war.js";
 
+
 export async function publishJSON<T>(
     ch: ConfirmChannel,
     exchange: string,
@@ -39,6 +40,9 @@ export async function publishJSON<T>(
       durable: !isTransient,
       autoDelete: isTransient,
       exclusive: isTransient,
+      arguments: {
+        "x-dead-letter-exchange": "peril_dlx",
+      },
       
     });
   

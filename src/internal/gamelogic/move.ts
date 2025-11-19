@@ -6,7 +6,7 @@ import {
   type Unit,
 } from "./gamedata.js";
 import { GameState } from "./gamestate.js";
-import type { Ack } from "../pubsub/message.js";
+ 
 
 export enum MoveOutcome {
   SamePlayer,
@@ -28,7 +28,7 @@ export function getOverlappingLocation(
   return null;
 }
 
-export function handleMove(gs: GameState, move: ArmyMove): Ack {
+export function handleMove(gs: GameState, move: ArmyMove): MoveOutcome {
   console.log();
   console.log("==== Move Detected ====");
   console.log(
@@ -42,7 +42,7 @@ export function handleMove(gs: GameState, move: ArmyMove): Ack {
 
   if (player.username === move.player.username) {
     console.log("------------------------");
-    return "NackDiscard"; // MoveOutcome.SamePlayer;
+    return  MoveOutcome.SamePlayer;
   }
 
   const overlappingLocation = getOverlappingLocation(player, move.player);
@@ -51,12 +51,12 @@ export function handleMove(gs: GameState, move: ArmyMove): Ack {
       `You have units in ${overlappingLocation}! You are at war with ${move.player.username}!`
     );
     console.log("------------------------");
-    return "Ack"; //MoveOutcome.MakeWar;
+    return  MoveOutcome.MakeWar;
   }
 
   console.log(`You are safe from ${move.player.username}'s units.`);
   console.log("------------------------");
-  return "Ack";  // MoveOutcome.Safe;
+  return MoveOutcome.Safe;
 }
 
 export function commandMove(gs: GameState, words: string[]): ArmyMove {

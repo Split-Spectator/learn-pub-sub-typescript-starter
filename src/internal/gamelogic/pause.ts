@@ -11,5 +11,6 @@ export function handlePause(gs: GameState, ps: PlayingState): Ack {
     gs.resumeGame();
   }
   console.log("------------------------");
+  console.log("> ");
   return "Ack";
 }

@@ -1,17 +1,17 @@
 import amqp from "amqplib";
 import { clientWelcome, commandStatus, printClientHelp, printQuit } from "../internal/gamelogic/gamelogic.js";
 import { declareAndBind, subscribeJSON, SimpleQueueType, publishJSON  } from "../internal/pubsub/message.js";
-import { ExchangePerilDirect, PauseKey, ArmyMovesPrefix, ExchangePerilTopic } from "../internal/routing/routing.js";
+import { ExchangePerilDirect, PauseKey, ArmyMovesPrefix, ExchangePerilTopic, WarRecognitionsPrefix } from "../internal/routing/routing.js";
 import type {  PlayingState, } from "../internal/gamelogic/gamestate.js";
 import  { GameState } from "../internal/gamelogic/gamestate.js";
 import { commandSpawn } from "../internal/gamelogic/spawn.js";
 import { getInput } from "../internal/gamelogic/gamelogic.js";
-import { commandMove, handleMove } from "../internal/gamelogic/move.js";
+import { commandMove, handleMove, MoveOutcome } from "../internal/gamelogic/move.js";
 import { cleanupAndExit } from "../server/exit.js";
 import { handlePause } from "../internal/gamelogic/pause.js";
-import type { ArmyMove } from "../internal/gamelogic/gamedata.js";
-
- 
+import type { RecognitionOfWar, ArmyMove } from "../internal/gamelogic/gamedata.js";
+import type { Ack } from "../internal/pubsub/message.js";
+import {WarOutcome, handleWar } from "../internal/gamelogic/war.js";
  
 
 async function main() {
@@ -48,7 +48,7 @@ async function main() {
     pauseUser,
     PauseKey,
     SimpleQueueType.Transient,
-    (ps) => handlePause(state, ps), 
+    (ps) => handlePause(state, ps),
   );
   
   await subscribeJSON<ArmyMove>(
@@ -57,7 +57,16 @@ async function main() {
     armyMovesQueue,
     armyMovesKey,
     SimpleQueueType.Transient,
-    (m) => handleMove(state, m), // returns Ack
+    makeHandlerMove(state, confirmCh, name),
+  );
+
+  await subscribeJSON(
+    connection,
+    ExchangePerilTopic,
+    WarRecognitionsPrefix,
+    `${WarRecognitionsPrefix}.*`,
+    SimpleQueueType.Durable,
+    handlerWar(state)
   );
   
   while (true) {
@@ -123,10 +132,51 @@ function handlerPause(gs: GameState): (ps: PlayingState) => void {
   };
 }
 
-function handlerMove(gs: GameState): (move: ArmyMove) => void {
-  return function (move: ArmyMove) {
-    handleMove(gs, move);
-    console.log(`Moved ${move.units.length} units to ${move.toLocation}`);
+function makeHandlerMove(gs: GameState, ch: amqp.ConfirmChannel, username: string) {
+  return async function (move: ArmyMove): Promise<Ack> {
+    const outcome = handleMove(gs, move);
+
+    if (outcome === MoveOutcome.MakeWar) {
+      const key = `${WarRecognitionsPrefix}.${username}`;
+      await publishJSON(ch, ExchangePerilTopic, key, move);
+      process.stdout.write("> ");
+      return "NackRequeue";
+    }
+    if (outcome === MoveOutcome.Safe) {
+      process.stdout.write("> ");
+      return "Ack";
+    }
+    if (outcome === MoveOutcome.SamePlayer) {
+      process.stdout.write("> ");
+      return "Ack";
+    }
     process.stdout.write("> ");
+    return "NackDiscard";
   };
 }
+
+function handlerWar(gs: GameState): (rw: RecognitionOfWar) => Ack {
+  return function (rw: RecognitionOfWar): Ack {
+    const warResolution = handleWar(gs, rw);
+
+    switch (warResolution.result) {
+      case WarOutcome.NotInvolved:
+      case WarOutcome.NoUnits:
+        process.stdout.write("> ");
+        return "NackDiscard";
+
+      case WarOutcome.OpponentWon:
+      case WarOutcome.YouWon:
+      case WarOutcome.Draw:
+        process.stdout.write("> ");
+        return "Ack";
+
+      default:
+        console.error("Unknown war outcome");
+        process.stdout.write("> ");
+        return  "NackDiscard";
+    }
+  };
+}
+
+
