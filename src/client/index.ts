@@ -1,116 +1,111 @@
 import amqp from "amqplib";
-import { clientWelcome, commandStatus, printClientHelp, printQuit } from "../internal/gamelogic/gamelogic.js";
-import { declareAndBind, publishJSON  } from "../internal/pubsub/message.js";
-import { ExchangePerilDirect, PauseKey, ArmyMovesPrefix, ExchangePerilTopic, WarRecognitionsPrefix, GameLogSlug } from "../internal/routing/routing.js";
-import type {  PlayingState, } from "../internal/gamelogic/gamestate.js";
-import  { GameState } from "../internal/gamelogic/gamestate.js";
+import {
+  clientWelcome,
+  commandStatus,
+  getInput,
+  printClientHelp,
+  printQuit,
+} from "../internal/gamelogic/gamelogic.js";
+import { SimpleQueueType, subscribeJSON } from "../internal/pubsub/consume.js";
+import {
+  ArmyMovesPrefix,
+  ExchangePerilDirect,
+  ExchangePerilTopic,
+  PauseKey,
+  WarRecognitionsPrefix,
+} from "../internal/routing/routing.js";
+import { GameState } from "../internal/gamelogic/gamestate.js";
 import { commandSpawn } from "../internal/gamelogic/spawn.js";
-import { getInput } from "../internal/gamelogic/gamelogic.js";
-import { commandMove, handleMove, MoveOutcome } from "../internal/gamelogic/move.js";
-import { cleanupAndExit } from "../server/exit.js";
-import { handlePause } from "../internal/gamelogic/pause.js";
-import type { RecognitionOfWar, ArmyMove } from "../internal/gamelogic/gamedata.js";
-import {WarOutcome, handleWar } from "../internal/gamelogic/war.js";
-import { publishMsgPack } from "../internal/pubsub/publish.js";
-import { subscribeJSON,  AckType,  SimpleQueueType  } from "../internal/pubsub/consume.js";
-import { subscribeMsgPack } from "../internal/pubsub/consume.js";
-import { writeLog, type GameLog } from "../internal/gamelogic/logs.js";
-
+import { commandMove } from "../internal/gamelogic/move.js";
+import { handlerMove, handlerPause, handlerWar } from "./handlers.js"
+import { publishJSON } from "../internal/pubsub/publish.js";
 
 async function main() {
+  const rabbitConnString = "amqp://guest:guest@localhost:5672/";
+  const conn = await amqp.connect(rabbitConnString);
+  console.log("Peril game client connected to RabbitMQ!");
 
-  process.on('SIGINT', async () => {
-    console.log('losing AMQP connection...');
-    await channel.close();
-    await connection.close();
-    console.log('Connection closed.');
-    process.exit(0);
-});
- 
-  console.log("Starting Peril client...");
-  const connection = await amqp.connect("amqp://guest:guest@localhost:5672/");
-  const channel = await connection.createChannel();
-  console.log("Connection Succesful!!!")
-
-  const name = await clientWelcome();
-  const confirmCh = await connection.createConfirmChannel();
-  const pauseUser = `${PauseKey}.${name}` ;
-
-  const armyMovesKey =   `${ArmyMovesPrefix}.*`;
-  const armyMovesQueue =  `${ArmyMovesPrefix}.${name}` ;
-  
-  await declareAndBind(connection, ExchangePerilTopic, armyMovesQueue, armyMovesKey, SimpleQueueType.Transient );
-
-  await declareAndBind(connection, ExchangePerilDirect, pauseUser, PauseKey, SimpleQueueType.Transient );
-
- 
-
-  const state = new GameState(name);
-  await subscribeJSON<PlayingState>(
-    connection,
-    ExchangePerilDirect,
-    pauseUser,
-    PauseKey,
-    SimpleQueueType.Transient,
-    (ps) => handlePause(state, ps),
+  ["SIGINT", "SIGTERM"].forEach((signal) =>
+    process.on(signal, async () => {
+      try {
+        await conn.close();
+        console.log("RabbitMQ connection closed.");
+      } catch (err) {
+        console.error("Error closing RabbitMQ connection:", err);
+      } finally {
+        process.exit(0);
+      }
+    }),
   );
-  
-  await subscribeJSON<ArmyMove>(
-    connection,
+
+  const username = await clientWelcome();
+  const gs = new GameState(username);
+  const publishCh = await conn.createConfirmChannel();
+
+  await subscribeJSON(
+    conn,
     ExchangePerilTopic,
-    armyMovesQueue,
-    armyMovesKey,
+    `${ArmyMovesPrefix}.${username}`,
+    `${ArmyMovesPrefix}.*`,
     SimpleQueueType.Transient,
-    makeHandlerMove(state, confirmCh, name),
+    handlerMove(gs, publishCh),
   );
 
   await subscribeJSON(
-    connection,
+    conn,
+    ExchangePerilDirect,
+    `${PauseKey}.${username}`,
+    PauseKey,
+    SimpleQueueType.Transient,
+    handlerPause(gs),
+  );
+
+  await subscribeJSON(
+    conn,
     ExchangePerilTopic,
     WarRecognitionsPrefix,
     `${WarRecognitionsPrefix}.*`,
     SimpleQueueType.Durable,
-    handlerWar(state, confirmCh, name)
+    handlerWar(gs),
   );
-  
+
   while (true) {
     const words = await getInput();
-    if (!words.length) continue;
-  
-    try {
-      switch (words[0]) {
-        case "spawn":
-          await commandSpawn(state, words);
-          break;
-        case "move":
-          console.log(`armyMovesQueue = ${armyMovesQueue}`)
-          const move = await commandMove(state, words);
-         
-          await publishJSON(confirmCh, ExchangePerilTopic, armyMovesQueue, move)
-
-          break;
-        case "status":
-          await commandStatus(state);
-          break;
-        case "help":
-          await printClientHelp();
-          break;
-        case "spam":
-          console.log("Spamming not allowed yet!");
-          break;
-        case "quit":
-          printQuit();
-          await cleanupAndExit(0);
-          return;
-        default:
-          console.log("unrecognized command");
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(msg);
+    if (words.length === 0) {
+      continue;
     }
-  
-    process.stdout.write("> ");
+    const command = words[0];
+    if (command === "move") {
+      try {
+        const move = commandMove(gs, words);
+        publishJSON(
+          publishCh,
+          ExchangePerilTopic,
+          `${ArmyMovesPrefix}.${username}`,
+          move,
+        );
+      } catch (err) {
+        console.log((err as Error).message);
+      }
+    } else if (command === "status") {
+      commandStatus(gs);
+    } else if (command === "spawn") {
+      try {
+        commandSpawn(gs, words);
+      } catch (err) {
+        console.log((err as Error).message);
+      }
+    } else if (command === "help") {
+      printClientHelp();
+    } else if (command === "quit") {
+      printQuit();
+      process.exit(0);
+    } else if (command === "spam") {
+      console.log("Spamming not allowed yet!");
+    } else {
+      console.log("Unknown command");
+      continue;
+    }
   }
 }
 
@@ -118,118 +113,3 @@ main().catch((err) => {
   console.error("Fatal error:", err);
   process.exit(1);
 });
- 
-function handlerPause(gs: GameState): (ps: PlayingState) => void {
-  return function (ps: PlayingState) {
-    if (ps.isPaused) {
-      console.log();
-      console.log("==== Game Paused ====");
-      gs.pauseGame();
-      console.log("------------------------");
-    } else {
-      console.log();
-      console.log("==== Game Resumed ====");
-      gs.resumeGame();
-      console.log("------------------------");
-    }
-    console.log("> ");
-  };
-}
-
-function makeHandlerMove(gs: GameState, ch: amqp.ConfirmChannel, username: string) {
-  return async function (move: ArmyMove): Promise<AckType> {
-    const outcome = handleMove(gs, move);
-
-    if (outcome === MoveOutcome.MakeWar) {
-      const warMessage: RecognitionOfWar = {
-        attacker: move.player,
-        defender: gs.getPlayerSnap(),
-      };
-      const key = `${WarRecognitionsPrefix}.${username}`;
-      const recognitionOfWar: RecognitionOfWar = {
-        attacker: move.player,
-        defender: gs.getPlayerSnap(),
-      };
-      try {
-        await publishJSON(ch, ExchangePerilTopic, key, recognitionOfWar);
-        process.stdout.write("> ");
-        return AckType.Ack;
-      } catch {
-        process.stdout.write("> ");
-        return AckType.NackRequeue;
-      }
-      await publishJSON(ch, ExchangePerilTopic, key, warMessage);
-      process.stdout.write("> ");
-      return "NackRequeue";
-    }
-    if (outcome === MoveOutcome.Safe) {
-      process.stdout.write("> ");
-      return AckType.Ack;
-    }
-    if (outcome === MoveOutcome.SamePlayer) {
-      process.stdout.write("> ");
-      return AckType.Ack;
-    }
-    process.stdout.write("> ");
-    return AckType.NackDiscard;
-  };
-}
-
-function handlerWar(
-  gs: GameState,
-  ch: amqp.ConfirmChannel,
-  username: string,
-): (rw: RecognitionOfWar) => Promise<AckType> {
-  return async function (rw: RecognitionOfWar): Promise<AckType> {
-    const warResolution = handleWar(gs, rw);
-
-    switch (warResolution.result) {
-      case WarOutcome.OpponentWon:
-      case WarOutcome.YouWon: {
-        const message = `${warResolution.winner} won a war against ${warResolution.loser}`;
-        try {
-          await publishGameLog(ch, username, message);
-          process.stdout.write("> ");
-          return AckType.Ack;
-        } catch {
-          process.stdout.write("> ");
-          return AckType.NackRequeue;
-        }
-      }
-
-      case WarOutcome.Draw: {
-        const message = `A war between ${warResolution.attacker} and ${warResolution.defender} resulted in a draw`;
-        try {
-          await publishGameLog(ch, username, message);
-          process.stdout.write("> ");
-          return AckType.Ack;
-        } catch {
-          process.stdout.write("> ");
-          return AckType.NackRequeue;
-        }
-      }
-
-      case WarOutcome.NotInvolved:
-        process.stdout.write("> ");
-        return "NackRequeue";
-      case WarOutcome.NoUnits:
-        process.stdout.write("> ");
-        return AckType.NackDiscard;
-
-      default:
-        console.error("Unknown war outcome");
-        process.stdout.write("> ");
-        return AckType.NackDiscard;
-    }
-  };
-}
-
-async function publishGameLog(ch: amqp.ConfirmChannel, username: string, message: string): Promise<void>{
-  const log: GameLog = {
-    currentTime: Date.now(), 
-    message: message,
-    username: username,
-  } 
-  await publishMsgPack(ch, ExchangePerilTopic, `${GameLogSlug}.${username}` , log );
-};
- 
