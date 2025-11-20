@@ -1,11 +1,13 @@
 import amqp from "amqplib";
 import process from "node:process";
-import { declareAndBind, publishJSON, SimpleQueueType } from "../internal/pubsub/message.js";
+import { declareAndBind, publishJSON,  } from "../internal/pubsub/message.js";
 import { ExchangePerilDirect, PauseKey, ExchangePerilTopic, GameLogSlug } from "../internal/routing/routing.js";
 import type { PlayingState, GameState } from "../internal/gamelogic/gamestate.js";
 import { printServerHelp, getInput } from "../internal/gamelogic/gamelogic.js";
 import { cleanupAndExit } from "./exit.js";
-
+import {SimpleQueueType} from "../internal/pubsub/consume.js"
+import { subscribeMsgPack } from "../internal/pubsub/consume.js";
+import { handlerLog } from "./handler.js";
 
 
 
@@ -22,7 +24,15 @@ async function main() {
     cleanupAndExit(0);
   });
 
-  await declareAndBind(connection, ExchangePerilTopic,  GameLogSlug ,  "game_logs.*", SimpleQueueType.Transient);
+  subscribeMsgPack(
+    connection,
+    ExchangePerilTopic,
+    GameLogSlug,
+    `${GameLogSlug}.*`,
+    SimpleQueueType.Durable,
+    handlerLog(),
+  );
+
 
   printServerHelp();
   await publishJSON(ch, ExchangePerilDirect, PauseKey, { isPaused: true });

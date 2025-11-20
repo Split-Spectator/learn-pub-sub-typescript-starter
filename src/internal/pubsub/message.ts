@@ -1,8 +1,8 @@
 import type { ConfirmChannel,  } from "amqplib";
 import amqp  from "amqplib";
-//import type {SimpleQueueType} from ""
- import type {Channel, ConsumeMessage } from "amqplib";
-import { handleWar } from "../gamelogic/war.js";
+ import {SimpleQueueType} from "./consume.js"
+ import type {Channel } from "amqplib";
+
 
 
 export async function publishJSON<T>(
@@ -20,10 +20,7 @@ export async function publishJSON<T>(
     ch.publish(exchange, routingKey, buf, options);
 
   };
- export enum SimpleQueueType {
-   "Durable", 
-  "Transient",
- } 
+
  
   export async function declareAndBind(
     conn: amqp.ChannelModel,
@@ -51,47 +48,6 @@ export async function publishJSON<T>(
   }
   
 
-  export async function subscribeJSON<T>(
-    conn: amqp.ChannelModel,
-    exchange: string,
-    queueName: string,
-    key: string,
-    queueType: SimpleQueueType, 
-    handler: (data: T) =>  Ack | Promise<Ack>,
-  ): Promise<void> {
-      const [channel, queue] = await declareAndBind(
-        conn,
-        exchange,
-        queueName,
-        key,
-        queueType
-      );
-    
-      await channel.consume(queueName, async (msg) => { 
-        if (!msg) return;
-        try {
-        const parsedData = JSON.parse(msg.content.toString());
-        const ack = await handler(parsedData);
-        switch (ack) {
-          case "Ack":
-            channel.ack(msg);
-            break;
-          case "NackRequeue":
-            channel.nack(msg, false, true);
-            break;
-          case "NackDiscard":
-            channel.nack(msg, false, false);
-            break; 
-          default:
 
-            channel.nack(msg, false, false);
-            break;
-        } 
-       }catch (err) {
-          console.log(`[${queueName}] Handler error -> NackDiscard`, err);
-          channel.nack(msg, false, false);
-        }
-      });
-    }
   
-    export type Ack = "Ack" | "NackRequeue" | "NackDiscard";
+    
