@@ -2,12 +2,12 @@ import type { ConfirmChannel,  } from "amqplib";
 import { encode } from "@msgpack/msgpack";
 
 
-export async function publishMsgPack<T>(
+export function publishMsgPack<T>(
     ch: ConfirmChannel,
     exchange: string,
     routingKey: string,
     value: T,
-  ): Promise<void> {
+  ): void {
     const encoded: Uint8Array = encode({value});
     const buffer: Buffer = Buffer.from(encoded.buffer, encoded.byteOffset, encoded.byteLength);
     const options = {
