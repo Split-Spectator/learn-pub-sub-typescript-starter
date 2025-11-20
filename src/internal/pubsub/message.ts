@@ -1,8 +1,8 @@
 import type { ConfirmChannel,  } from "amqplib";
 import amqp  from "amqplib";
-//import type {SimpleQueueType} from ""
- import type {Channel, ConsumeMessage } from "amqplib";
-import { handleWar } from "../gamelogic/war.js";
+ import {SimpleQueueType} from "./consume.js"
+ import type {Channel } from "amqplib";
+
 
 
 export async function publishJSON<T>(
@@ -20,10 +20,7 @@ export async function publishJSON<T>(
     ch.publish(exchange, routingKey, buf, options);
 
   };
- export enum SimpleQueueType {
-   "Durable", 
-  "Transient",
- } 
+
  
   export async function declareAndBind(
     conn: amqp.ChannelModel,
@@ -100,3 +97,6 @@ export async function publishJSON<T>(
     }
   
     export type Ack = "Ack" | "NackRequeue" | "NackDiscard";
+
+  
+    

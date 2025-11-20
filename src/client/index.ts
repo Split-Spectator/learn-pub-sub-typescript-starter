@@ -1,7 +1,7 @@
 import amqp from "amqplib";
 import { clientWelcome, commandStatus, printClientHelp, printQuit } from "../internal/gamelogic/gamelogic.js";
-import { declareAndBind, subscribeJSON, SimpleQueueType, publishJSON  } from "../internal/pubsub/message.js";
-import { ExchangePerilDirect, PauseKey, ArmyMovesPrefix, ExchangePerilTopic, WarRecognitionsPrefix } from "../internal/routing/routing.js";
+import { declareAndBind, publishJSON  } from "../internal/pubsub/message.js";
+import { ExchangePerilDirect, PauseKey, ArmyMovesPrefix, ExchangePerilTopic, WarRecognitionsPrefix, GameLogSlug } from "../internal/routing/routing.js";
 import type {  PlayingState, } from "../internal/gamelogic/gamestate.js";
 import  { GameState } from "../internal/gamelogic/gamestate.js";
 import { commandSpawn } from "../internal/gamelogic/spawn.js";
@@ -10,9 +10,12 @@ import { commandMove, handleMove, MoveOutcome } from "../internal/gamelogic/move
 import { cleanupAndExit } from "../server/exit.js";
 import { handlePause } from "../internal/gamelogic/pause.js";
 import type { RecognitionOfWar, ArmyMove } from "../internal/gamelogic/gamedata.js";
-import type { Ack } from "../internal/pubsub/message.js";
 import {WarOutcome, handleWar } from "../internal/gamelogic/war.js";
- 
+import { publishMsgPack } from "../internal/pubsub/publish.js";
+import { subscribeJSON,  AckType,  SimpleQueueType  } from "../internal/pubsub/consume.js";
+import { subscribeMsgPack } from "../internal/pubsub/consume.js";
+import { writeLog, type GameLog } from "../internal/gamelogic/logs.js";
+
 
 async function main() {
 
@@ -40,6 +43,7 @@ async function main() {
 
   await declareAndBind(connection, ExchangePerilDirect, pauseUser, PauseKey, SimpleQueueType.Transient );
 
+ 
 
   const state = new GameState(name);
   await subscribeJSON<PlayingState>(
@@ -66,7 +70,7 @@ async function main() {
     WarRecognitionsPrefix,
     `${WarRecognitionsPrefix}.*`,
     SimpleQueueType.Durable,
-    handlerWar(state)
+    handlerWar(state, confirmCh, name)
   );
   
   while (true) {
@@ -133,7 +137,7 @@ function handlerPause(gs: GameState): (ps: PlayingState) => void {
 }
 
 function makeHandlerMove(gs: GameState, ch: amqp.ConfirmChannel, username: string) {
-  return async function (move: ArmyMove): Promise<Ack> {
+  return async function (move: ArmyMove): Promise<AckType> {
     const outcome = handleMove(gs, move);
 
     if (outcome === MoveOutcome.MakeWar) {
@@ -142,48 +146,90 @@ function makeHandlerMove(gs: GameState, ch: amqp.ConfirmChannel, username: strin
         defender: gs.getPlayerSnap(),
       };
       const key = `${WarRecognitionsPrefix}.${username}`;
+      const recognitionOfWar: RecognitionOfWar = {
+        attacker: move.player,
+        defender: gs.getPlayerSnap(),
+      };
+      try {
+        await publishJSON(ch, ExchangePerilTopic, key, recognitionOfWar);
+        process.stdout.write("> ");
+        return AckType.Ack;
+      } catch {
+        process.stdout.write("> ");
+        return AckType.NackRequeue;
+      }
       await publishJSON(ch, ExchangePerilTopic, key, warMessage);
       process.stdout.write("> ");
       return "NackRequeue";
     }
     if (outcome === MoveOutcome.Safe) {
       process.stdout.write("> ");
-      return "Ack";
+      return AckType.Ack;
     }
     if (outcome === MoveOutcome.SamePlayer) {
       process.stdout.write("> ");
-      return "Ack";
+      return AckType.Ack;
     }
     process.stdout.write("> ");
-    return "NackDiscard";
+    return AckType.NackDiscard;
   };
 }
 
-function handlerWar(gs: GameState): (rw: RecognitionOfWar) => Ack {
-  return function (rw: RecognitionOfWar): Ack {
+function handlerWar(
+  gs: GameState,
+  ch: amqp.ConfirmChannel,
+  username: string,
+): (rw: RecognitionOfWar) => Promise<AckType> {
+  return async function (rw: RecognitionOfWar): Promise<AckType> {
     const warResolution = handleWar(gs, rw);
 
     switch (warResolution.result) {
+      case WarOutcome.OpponentWon:
+      case WarOutcome.YouWon: {
+        const message = `${warResolution.winner} won a war against ${warResolution.loser}`;
+        try {
+          await publishGameLog(ch, username, message);
+          process.stdout.write("> ");
+          return AckType.Ack;
+        } catch {
+          process.stdout.write("> ");
+          return AckType.NackRequeue;
+        }
+      }
+
+      case WarOutcome.Draw: {
+        const message = `A war between ${warResolution.attacker} and ${warResolution.defender} resulted in a draw`;
+        try {
+          await publishGameLog(ch, username, message);
+          process.stdout.write("> ");
+          return AckType.Ack;
+        } catch {
+          process.stdout.write("> ");
+          return AckType.NackRequeue;
+        }
+      }
+
       case WarOutcome.NotInvolved:
         process.stdout.write("> ");
         return "NackRequeue";
       case WarOutcome.NoUnits:
         process.stdout.write("> ");
-        return  "NackDiscard";
-
-
-      case WarOutcome.OpponentWon:
-      case WarOutcome.YouWon:
-      case WarOutcome.Draw:
-        process.stdout.write("> ");
-        return "Ack";
+        return AckType.NackDiscard;
 
       default:
         console.error("Unknown war outcome");
         process.stdout.write("> ");
-        return  "NackDiscard";
+        return AckType.NackDiscard;
     }
   };
 }
 
-
+async function publishGameLog(ch: amqp.ConfirmChannel, username: string, message: string): Promise<void>{
+  const log: GameLog = {
+    currentTime: Date.now(), 
+    message: message,
+    username: username,
+  } 
+  await publishMsgPack(ch, ExchangePerilTopic, `${GameLogSlug}.${username}` , log );
+};
+ 
