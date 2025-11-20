@@ -1,8 +1,9 @@
 import amqp from "amqplib";
 import process from "node:process";
-import { declareAndBind, publishJSON,  } from "../internal/pubsub/message.js";
+import { publishJSON,  } from "../internal/pubsub/publish.js";
 import { ExchangePerilDirect, PauseKey, ExchangePerilTopic, GameLogSlug } from "../internal/routing/routing.js";
 import type { PlayingState, GameState } from "../internal/gamelogic/gamestate.js";
+import { declareAndBind} from "../internal/pubsub/consume.js"
 import { printServerHelp, getInput } from "../internal/gamelogic/gamelogic.js";
 import { cleanupAndExit } from "./exit.js";
 import {SimpleQueueType} from "../internal/pubsub/consume.js"
