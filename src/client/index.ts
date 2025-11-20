@@ -137,8 +137,12 @@ function makeHandlerMove(gs: GameState, ch: amqp.ConfirmChannel, username: strin
     const outcome = handleMove(gs, move);
 
     if (outcome === MoveOutcome.MakeWar) {
+      const warMessage: RecognitionOfWar = {
+        attacker: move.player,
+        defender: gs.getPlayerSnap(),
+      };
       const key = `${WarRecognitionsPrefix}.${username}`;
-      await publishJSON(ch, ExchangePerilTopic, key, move);
+      await publishJSON(ch, ExchangePerilTopic, key, warMessage);
       process.stdout.write("> ");
       return "NackRequeue";
     }
@@ -161,9 +165,12 @@ function handlerWar(gs: GameState): (rw: RecognitionOfWar) => Ack {
 
     switch (warResolution.result) {
       case WarOutcome.NotInvolved:
+        process.stdout.write("> ");
+        return "NackRequeue";
       case WarOutcome.NoUnits:
         process.stdout.write("> ");
-        return "NackDiscard";
+        return  "NackDiscard";
+
 
       case WarOutcome.OpponentWon:
       case WarOutcome.YouWon:

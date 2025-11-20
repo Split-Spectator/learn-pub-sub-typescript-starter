@@ -67,24 +67,24 @@ export async function publishJSON<T>(
         queueType
       );
     
-      await channel.consume(queueName, async (msg) => { 
+      await channel.consume(queue.queue, async (msg) => { 
         if (!msg) return;
-        console.log(`[${queueName}] message received`);
+        console.log(`[${queue.queue}] message received`);
         try {
         const parsedData = JSON.parse(msg.content.toString());
         const ack = await handler(parsedData);
-        console.log(`[${queueName}] handler typeof: ${typeof ack}, value:`, ack);
+        console.log(`[${queue.queue}] handler typeof: ${typeof ack}, value:`, ack);
         switch (ack) {
           case "Ack":
-            console.log(`[${queueName}] Ack`);
+            console.log(`[${queue.queue}] Ack`);
             channel.ack(msg);
             break;
           case "NackRequeue":
-            console.log(`[${queueName}] NackRequeue`);
+            console.log(`[${queue.queue}] NackRequeue`);
             channel.nack(msg, false, true);
             break;
           case "NackDiscard":
-            console.log(`[${queueName}] NackDiscard`);
+            console.log(`[${queue.queue}] NackDiscard`);
             channel.nack(msg, false, false);
             break; 
           default:
@@ -93,7 +93,7 @@ export async function publishJSON<T>(
             break;
         } 
        }catch (err) {
-          console.log(`[${queueName}] Handler error -> NackDiscard`, err);
+          console.log(`[${queue.queue}] Handler error -> NackDiscard`, err);
           channel.nack(msg, false, false);
         }
       });
